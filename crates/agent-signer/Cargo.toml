@@ -1,0 +1,16 @@
+[package]
+name = "agent-signer"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+description = "Agent share CLI for a Zcash FROST co-signer"
+
+[dependencies]
+cosigner = { workspace = true }
+rand = "0.8"
+hex = { workspace = true }
+mandate = { workspace = true }
+pczt-inspect = { workspace = true }
+serde_json = { workspace = true }

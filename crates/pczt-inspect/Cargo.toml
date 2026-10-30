@@ -1,0 +1,20 @@
+[package]
+name = "pczt-inspect"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+description = "Decode a Zcash PCZT without trusting the proposer's summary"
+
+[dependencies]
+group = "0.14"
+hex = { workspace = true }
+mandate = { workspace = true }
+orchard = { version = "0.16", default-features = false }
+pasta_curves = "0.6"
+pczt = { git = "https://github.com/zcash/librustzcash", rev = "a551fac8a233f54799ca1920ef78ef098cfda929", default-features = false, features = ["std", "orchard", "sapling", "transparent", "signer"] }
+subtle = "2.2.3"
+thiserror = { workspace = true }
+zcash_address = { git = "https://github.com/zcash/librustzcash", rev = "a551fac8a233f54799ca1920ef78ef098cfda929" }
+zcash_protocol = { git = "https://github.com/zcash/librustzcash", rev = "a551fac8a233f54799ca1920ef78ef098cfda929" }
