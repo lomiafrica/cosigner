@@ -323,7 +323,7 @@ dependencies = [
  "mandate",
  "pczt-inspect",
  "rand 0.8.8",
- "reddsa 0.5.1",
+ "reddsa 0.5.2",
  "serde_json",
 ]
 
@@ -420,12 +420,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "debugless-unwrap"
-version = "0.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f400d0750c0c069e8493f2256cb4da6f604b6d2eeb69a0ca8863acde352f8400"
-
-[[package]]
 name = "defmt"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -461,17 +455,6 @@ name = "deranged"
 version = "0.5.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e9de72ce2ad1f90dc62fa25f0f430ef85eb4b0d8fa0be4f30373bc40a21d28e"
-
-[[package]]
-name = "derive-getters"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0a6433aac097572ea8ccc60b3f2e756c661c9aeed9225cdd4d0cb119cb7ff6ba"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
 
 [[package]]
 name = "derive-getters"
@@ -608,14 +591,13 @@ dependencies = [
 
 [[package]]
 name = "frost-core"
-version = "2.2.0"
+version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2619366c227233c0f817ae01156bd21b8cf74d2bd96cbe0889f4c2e266724e44"
+checksum = "81ef2787af391c7e8bedc037a3b9ea03dde803fbd93e778e6bb369547800e5cd"
 dependencies = [
  "byteorder",
  "const-crc32-nostd",
- "debugless-unwrap",
- "derive-getters 0.5.0",
+ "derive-getters",
  "document-features",
  "hex",
  "itertools",
@@ -626,15 +608,16 @@ dependencies = [
  "thiserror 2.0.21",
  "visibility",
  "zeroize",
+ "zeroize_derive",
 ]
 
 [[package]]
 name = "frost-rerandomized"
-version = "2.0.0-rc.0"
+version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bdb14a6054f9ce5aa4912c60c11392d42c43acec8295ee1df1f67a9d0b7a73ee"
+checksum = "8f4c5cedd2426728adef2c0b1720f57676354c473836d1ccc50d0f0d1c91942b"
 dependencies = [
- "derive-getters 0.4.0",
+ "derive-getters",
  "document-features",
  "frost-core",
  "hex",
@@ -1219,8 +1202,9 @@ checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
 
 [[package]]
 name = "reddsa"
-version = "0.5.1"
-source = "git+https://github.com/ZcashFoundation/reddsa.git?rev=ed49e9ca0699a6450f6d4a9fe62ff168f5ea1ead#ed49e9ca0699a6450f6d4a9fe62ff168f5ea1ead"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4784b85c8bfd17b36b86e664e6e504ecdb586001086ee23749e4a633bbb84832"
 dependencies = [
  "blake2b_simd",
  "byteorder",
@@ -1231,7 +1215,7 @@ dependencies = [
  "pasta_curves 0.5.2",
  "rand_core 0.6.4",
  "serde",
- "thiserror 1.0.69",
+ "thiserror 2.0.21",
  "zeroize",
 ]
 

@@ -12,6 +12,8 @@ The spending key is a FROST 2-of-3 group over the RedPallas ciphersuite used for
 
 The policy service does not sign a payment that needs the user. Agent plus user is that path. The policy share stays out of it.
 
+The FROST stack is `frost-core` 3, `frost-rerandomized` 3, and `reddsa` 0.5.2. That is the same stack as the FROST co-signing work in ZCG issue 490 and the Zafe wallet, so a share and its messages can meet theirs.
+
 A trusted dealer exists for tests. It sees every share, so production setup is the three-round distributed key generation in `cosigner`. After key generation the group verifying key is forced to even Y, and the share is negated with it. The draft FROST member backup (the Zkool `zkfrost` string) does the same. Skipping it exports a bad share about half the time.
 
 ## PCZT
