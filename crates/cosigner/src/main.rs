@@ -1,18 +1,22 @@
-//! Local JSON interface for one FROST share.
+//! Local JSON interface for the policy share.
 //!
 //! The process prints one JSON object on stdout. Secrets are in that object
 //! because the caller has to keep them. They are not written to stderr.
+//!
+//! There is no raw `sign` here. The policy share signs only through
+//! `authorize`, which reads the message and randomizers from the PCZT.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Read, Write};
 
 use cosigner::{
-    aggregate, commit, commitment_id, commitments_from_hex, dkg_part1, dkg_part2, dkg_part3,
+    aggregate, authorize_pczt, commit, commitments_from_hex, dkg_part1, dkg_part2, dkg_part3,
     identifier, key_from_hex, nonces_from_hex, public_from_hex, randomizer_from_alpha,
     round1_package_from_hex, round1_secret_from_hex, round2_package_from_hex,
-    round2_secret_from_hex, share_from_hex, sign_share, to_hex, ReplayGuard,
+    round2_secret_from_hex, share_from_hex, to_hex, Authorized, Round,
 };
 use mandate::{evaluate, Ledger, Mandate};
+use pczt_inspect::PendingSpend;
 use serde_json::{json, Value};
 
 fn read_stdin() -> Result<Value, String> {
@@ -57,6 +61,32 @@ where
 fn ok(value: Value) -> Result<(), String> {
     writeln!(io::stdout(), "{value}").map_err(|_| "stdout".to_string())?;
     Ok(())
+}
+
+const MAX_ROUNDS: u64 = 16;
+
+fn policy_inputs(input: &Value) -> Result<(Mandate, Ledger, u64), String> {
+    let mandate: Mandate =
+        serde_json::from_value(input.get("mandate").cloned().unwrap_or(Value::Null))
+            .map_err(|_| "mandate".to_string())?;
+    let ledger: Ledger =
+        serde_json::from_value(input.get("ledger").cloned().unwrap_or(Value::Null))
+            .map_err(|_| "ledger".to_string())?;
+    let now = input.get("now_unix").and_then(Value::as_u64).unwrap_or(0);
+    Ok((mandate, ledger, now))
+}
+
+fn spends_json(spends: &[PendingSpend]) -> Value {
+    spends
+        .iter()
+        .map(|spend| {
+            json!({
+                "pool": spend.pool.name(),
+                "index": spend.index,
+                "alpha_hex": spend.alpha_hex,
+            })
+        })
+        .collect()
 }
 
 fn run(command: &str, input: &Value) -> Result<(), String> {
@@ -104,46 +134,59 @@ fn run(command: &str, input: &Value) -> Result<(), String> {
         }
         "commit" => {
             let key = key_from_hex(field(input, "key_hex")?)?;
-            let (nonces, commitment) = commit(&key, &mut rng)?;
-            ok(json!({
-                "ok": true,
-                "nonces_hex": to_hex(nonces.serialize())?,
-                "commitment_hex": to_hex(commitment.serialize())?,
-            }))
-        }
-        "sign" => {
-            let key = key_from_hex(field(input, "key_hex")?)?;
-            let nonces = nonces_from_hex(field(input, "nonces_hex")?)?;
-            let commitments = packages(input, "commitments", commitments_from_hex)?;
-            let message =
-                hex::decode(field(input, "message_hex")?).map_err(|_| "message hex".to_string())?;
-            let alpha =
-                hex::decode(field(input, "alpha_hex")?).map_err(|_| "alpha hex".to_string())?;
-            let alpha: [u8; 32] = alpha.try_into().map_err(|_| "alpha".to_string())?;
-            let mut guard = ReplayGuard::default();
-            if let Some(seen) = input.get("seen_commitment_ids").and_then(Value::as_array) {
-                for id in seen {
-                    if let Some(id) = id.as_str() {
-                        guard.commitments.insert(id.to_string());
-                    }
-                }
+            let count = input.get("count").and_then(Value::as_u64).unwrap_or(1);
+            if count == 0 || count > MAX_ROUNDS {
+                return Err("count".to_string());
             }
-            let commitment = commitment_id(&commitments)?;
-            guard.begin(
-                field(input, "sighash_hex").unwrap_or("sighash"),
-                &commitment,
-            )?;
-            let share = sign_share(
-                &key,
-                &nonces,
-                &commitments,
-                &message,
-                randomizer_from_alpha(&alpha)?,
-            )?;
+            let mut rounds = Vec::new();
+            for _ in 0..count {
+                let (nonces, commitment) = commit(&key, &mut rng)?;
+                rounds.push(json!({
+                    "nonces_hex": to_hex(nonces.serialize())?,
+                    "commitment_hex": to_hex(commitment.serialize())?,
+                }));
+            }
+            ok(json!({ "ok": true, "rounds": rounds }))
+        }
+        "authorize" => {
+            let key = key_from_hex(field(input, "key_hex")?)?;
+            let pczt =
+                hex::decode(field(input, "pczt_hex")?).map_err(|_| "pczt hex".to_string())?;
+            let (mandate, ledger, now) = policy_inputs(input)?;
+            let rounds = input
+                .get("rounds")
+                .and_then(Value::as_array)
+                .ok_or_else(|| "missing rounds".to_string())?
+                .iter()
+                .map(|round| {
+                    Ok(Round {
+                        nonces: nonces_from_hex(field(round, "nonces_hex")?)?,
+                        commitments: packages(round, "commitments", commitments_from_hex)?,
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            let seen: BTreeSet<String> = input
+                .get("seen_commitment_ids")
+                .and_then(Value::as_array)
+                .map(|ids| {
+                    ids.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default();
+            let result = authorize_pczt(&key, &pczt, &mandate, &ledger, now, &rounds, &seen)?;
+            let shares = match &result.authorized {
+                Authorized::Signed { shares, .. } => shares.clone(),
+                _ => Vec::new(),
+            };
             ok(json!({
                 "ok": true,
-                "share_hex": hex::encode(share.serialize()),
-                "commitment_id": commitment,
+                "decision": result.decision,
+                "sighash_hex": result.payment.sighash_hex,
+                "spends": spends_json(&result.spends),
+                "shares": shares,
+                "commitment_ids": result.commitment_ids,
             }))
         }
         "aggregate" => {
@@ -170,16 +213,15 @@ fn run(command: &str, input: &Value) -> Result<(), String> {
         "decide" => {
             let pczt =
                 hex::decode(field(input, "pczt_hex")?).map_err(|_| "pczt hex".to_string())?;
-            let mandate: Mandate =
-                serde_json::from_value(input.get("mandate").cloned().unwrap_or(Value::Null))
-                    .map_err(|_| "mandate".to_string())?;
-            let ledger: Ledger =
-                serde_json::from_value(input.get("ledger").cloned().unwrap_or(Value::Null))
-                    .map_err(|_| "ledger".to_string())?;
-            let now = input.get("now_unix").and_then(Value::as_u64).unwrap_or(0);
+            let (mandate, ledger, now) = policy_inputs(input)?;
             let (payment, decision) = cosigner::decide_pczt(&pczt, &mandate, &ledger, now)?;
-            let _ = payment;
-            ok(json!({ "ok": true, "decision": decision }))
+            let spends = pczt_inspect::pending_spends(&pczt).map_err(|err| err.to_string())?;
+            ok(json!({
+                "ok": true,
+                "decision": decision,
+                "sighash_hex": payment.sighash_hex,
+                "spends": spends_json(&spends),
+            }))
         }
         "evaluate" => {
             let payment =

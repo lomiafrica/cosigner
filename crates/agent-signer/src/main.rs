@@ -1,4 +1,7 @@
-//! Agent-share commands: propose, sign, finalize, broadcast, request.
+//! Agent-share commands: propose, sign, finalize, apply, broadcast, request.
+//!
+//! The same binary also serves the user share on the phone side: `sign` is a
+//! raw FROST round. The policy share does not have a raw `sign`.
 //!
 //! `broadcast` posts the raw transaction only when `ZCASH_BROADCAST_URL` is
 //! set. lightwalletd speaks gRPC, and this binary does not.
@@ -6,13 +9,14 @@
 use std::io::{self, Read, Write};
 use std::process::Command;
 
-use agent_signer::request_uri;
+use agent_signer::{apply_signatures, change_address, group_ak, request_uri, SpendSignature};
 use cosigner::{
     aggregate, commit, commitments_from_hex, dkg_part1, dkg_part2, dkg_part3, identifier,
     key_from_hex, nonces_from_hex, public_from_hex, randomizer_from_alpha, round1_package_from_hex,
     round1_secret_from_hex, round2_package_from_hex, round2_secret_from_hex, share_from_hex,
     sign_share, to_hex,
 };
+use pczt_inspect::Pool;
 use serde_json::{json, Value};
 
 fn read_stdin() -> Result<Value, String> {
@@ -104,14 +108,62 @@ fn run(command: &str, input: &Value) -> Result<(), String> {
                     .map_err(|_| "ledger".to_string())?;
             let now = input.get("now_unix").and_then(Value::as_u64).unwrap_or(0);
             let (payment, decision) = agent_signer::propose(&pczt, &mandate, &ledger, now)?;
-            let alphas = pczt_inspect::spend_alphas(&pczt).map_err(|err| err.to_string())?;
+            let spends = pczt_inspect::pending_spends(&pczt).map_err(|err| err.to_string())?;
+            let spends: Vec<Value> = spends
+                .iter()
+                .map(|spend| {
+                    json!({
+                        "pool": spend.pool.name(),
+                        "index": spend.index,
+                        "alpha_hex": spend.alpha_hex,
+                    })
+                })
+                .collect();
             emit(json!({
                 "ok": true,
                 "decision": decision,
                 "sighash_hex": payment.sighash_hex,
-                "alphas": alphas,
+                "outputs": payment.outputs,
+                "fee_zat": payment.fee_zat,
+                "spends": spends,
             }))
         }
+        "apply" => {
+            let pczt =
+                hex::decode(field(input, "pczt_hex")?).map_err(|_| "pczt hex".to_string())?;
+            let signatures = input
+                .get("signatures")
+                .and_then(Value::as_array)
+                .ok_or_else(|| "missing signatures".to_string())?
+                .iter()
+                .map(|entry| {
+                    let pool = Pool::parse(field(entry, "pool")?).ok_or("pool".to_string())?;
+                    let index = entry
+                        .get("index")
+                        .and_then(Value::as_u64)
+                        .ok_or_else(|| "index".to_string())?
+                        as usize;
+                    let signature: [u8; 64] = hex::decode(field(entry, "signature_hex")?)
+                        .ok()
+                        .and_then(|bytes| bytes.try_into().ok())
+                        .ok_or_else(|| "signature".to_string())?;
+                    Ok(SpendSignature {
+                        pool,
+                        index,
+                        signature,
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            let signed = apply_signatures(&pczt, &signatures)?;
+            emit(json!({ "ok": true, "pczt_hex": hex::encode(signed) }))
+        }
+        "group-key" => {
+            emit(json!({ "ok": true, "ak_hex": group_ak(field(input, "public_hex")?)? }))
+        }
+        "change-address" => emit(json!({
+            "ok": true,
+            "address": change_address(field(input, "ufvk")?)?,
+        })),
         "request" => {
             let uri = request_uri(
                 field(input, "address")?,
@@ -157,10 +209,19 @@ fn run(command: &str, input: &Value) -> Result<(), String> {
                 }
                 "commit" => {
                     let key = key_from_hex(field(input, "key_hex")?)?;
-                    let (nonces, commitment) = commit(&key, &mut rng)?;
-                    emit(
-                        json!({ "ok": true, "nonces_hex": to_hex(nonces.serialize())?, "commitment_hex": to_hex(commitment.serialize())? }),
-                    )
+                    let count = input.get("count").and_then(Value::as_u64).unwrap_or(1);
+                    if count == 0 || count > 16 {
+                        return Err("count".to_string());
+                    }
+                    let mut rounds = Vec::new();
+                    for _ in 0..count {
+                        let (nonces, commitment) = commit(&key, &mut rng)?;
+                        rounds.push(json!({
+                            "nonces_hex": to_hex(nonces.serialize())?,
+                            "commitment_hex": to_hex(commitment.serialize())?,
+                        }));
+                    }
+                    emit(json!({ "ok": true, "rounds": rounds }))
                 }
                 "sign" => {
                     let key = key_from_hex(field(input, "key_hex")?)?;

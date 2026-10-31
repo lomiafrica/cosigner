@@ -18,6 +18,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use frost_rerandomized::frost_core::{self as frost, Ciphersuite, Field, Group};
 use frost_rerandomized::{RandomizedParams, Randomizer};
 use mandate::{evaluate, Decision, InspectedPayment, Ledger, Mandate};
+use pczt_inspect::PendingSpend;
 use rand::{CryptoRng, RngCore};
 use reddsa::frost::redpallas::keys::EvenY;
 use reddsa::frost::redpallas::PallasBlake2b512;
@@ -274,11 +275,12 @@ pub fn commitment_id(
     Ok(hex::encode(raw))
 }
 
-/// What the policy share returns. `Signed` is the only arm that carries a share.
+/// What the policy share returns. `Signed` is the only arm that carries shares,
+/// one per pending spend.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Authorized {
     Signed {
-        share_hex: String,
+        shares: Vec<String>,
         amount_zat: u64,
         fee_zat: u64,
     },
@@ -294,14 +296,14 @@ pub enum Authorized {
 /// Run `sign` only when the mandate allows the payment.
 pub fn authorize<F>(decision: &Decision, sign: F) -> Result<Authorized, String>
 where
-    F: FnOnce() -> Result<String, String>,
+    F: FnOnce() -> Result<Vec<String>, String>,
 {
     match decision {
         Decision::Allow {
             amount_zat,
             fee_zat,
         } => Ok(Authorized::Signed {
-            share_hex: sign()?,
+            shares: sign()?,
             amount_zat: *amount_zat,
             fee_zat: *fee_zat,
         }),
@@ -322,8 +324,86 @@ pub fn decide_pczt(
     now_unix: u64,
 ) -> Result<(InspectedPayment, Decision), String> {
     let payment = pczt_inspect::inspect(pczt).map_err(|err| err.to_string())?;
-    let decision = evaluate(&payment, mandate, ledger, now_unix).map_err(|err| err.to_string())?;
+    let network = pczt_inspect::network(pczt).map_err(|err| err.to_string())?;
+    let mandate = pczt_inspect::bind_mandate(mandate, network);
+    let decision = evaluate(&payment, &mandate, ledger, now_unix).map_err(|err| err.to_string())?;
     Ok((payment, decision))
+}
+
+/// One FROST round for one pending spend: this share's nonces and the
+/// commitments of the two signers.
+pub struct Round {
+    pub nonces: SigningNonces,
+    pub commitments: BTreeMap<Identifier, SigningCommitments>,
+}
+
+pub struct PolicyResult {
+    pub payment: InspectedPayment,
+    pub decision: Decision,
+    pub spends: Vec<PendingSpend>,
+    pub authorized: Authorized,
+    pub commitment_ids: Vec<String>,
+}
+
+/// Judge the PCZT, then sign only what was judged. The message is the PCZT's
+/// own sighash and each randomizer is that spend's own alpha. The caller
+/// supplies neither, so an approval cannot be reused for another transaction.
+pub fn authorize_pczt(
+    key: &KeyPackage,
+    pczt: &[u8],
+    mandate: &Mandate,
+    ledger: &Ledger,
+    now_unix: u64,
+    rounds: &[Round],
+    seen_commitment_ids: &BTreeSet<String>,
+) -> Result<PolicyResult, String> {
+    let (payment, decision) = decide_pczt(pczt, mandate, ledger, now_unix)?;
+    let spends = pczt_inspect::pending_spends(pczt).map_err(|err| err.to_string())?;
+    let mut commitment_ids = Vec::new();
+    let authorized = authorize(&decision, || {
+        if spends.is_empty() || rounds.len() != spends.len() {
+            return Err("rounds".to_string());
+        }
+        let policy = identifier(POLICY_ID)?;
+        for round in rounds {
+            if round.commitments.len() != usize::from(MIN_SIGNERS)
+                || !round.commitments.contains_key(&policy)
+            {
+                return Err("signers".to_string());
+            }
+            let id = commitment_id(&round.commitments)?;
+            if seen_commitment_ids.contains(&id) || commitment_ids.contains(&id) {
+                return Err("replay".to_string());
+            }
+            commitment_ids.push(id);
+        }
+        let message = hex::decode(&payment.sighash_hex).map_err(|_| "sighash".to_string())?;
+        spends
+            .iter()
+            .zip(rounds)
+            .map(|(spend, round)| {
+                let alpha: [u8; 32] = hex::decode(&spend.alpha_hex)
+                    .ok()
+                    .and_then(|bytes| bytes.try_into().ok())
+                    .ok_or_else(|| "alpha".to_string())?;
+                let share = sign_share(
+                    key,
+                    &round.nonces,
+                    &round.commitments,
+                    &message,
+                    randomizer_from_alpha(&alpha)?,
+                )?;
+                Ok(hex::encode(share.serialize()))
+            })
+            .collect()
+    })?;
+    Ok(PolicyResult {
+        payment,
+        decision,
+        spends,
+        authorized,
+        commitment_ids,
+    })
 }
 
 #[cfg(test)]
@@ -475,7 +555,7 @@ mod tests {
         };
         let authorized = authorize(&decision, || {
             called = true;
-            Ok("share".to_string())
+            Ok(vec!["share".to_string()])
         })
         .unwrap();
         assert!(!called);
@@ -496,7 +576,7 @@ mod tests {
         };
         let authorized = authorize(&decision, || {
             called = true;
-            Ok("share".to_string())
+            Ok(vec!["share".to_string()])
         })
         .unwrap();
         assert!(!called);
@@ -514,11 +594,11 @@ mod tests {
             amount_zat: 10,
             fee_zat: 1,
         };
-        let authorized = authorize(&decision, || Ok("aa".to_string())).unwrap();
+        let authorized = authorize(&decision, || Ok(vec!["aa".to_string()])).unwrap();
         assert_eq!(
             authorized,
             Authorized::Signed {
-                share_hex: "aa".to_string(),
+                shares: vec!["aa".to_string()],
                 amount_zat: 10,
                 fee_zat: 1
             }
@@ -540,6 +620,61 @@ mod tests {
             to_hex(dealt.public.serialize()).unwrap()
         );
         let _ = id;
+    }
+
+    fn fixture() -> &'static [u8] {
+        include_bytes!("../../pczt-inspect/tests/ironwood_v6.pczt")
+    }
+
+    fn fixture_mandate() -> Mandate {
+        let payment = pczt_inspect::inspect(fixture()).unwrap();
+        Mandate {
+            per_payment_zat: u64::MAX / 4,
+            daily_zat: u64::MAX / 4,
+            total_zat: u64::MAX / 4,
+            fee_cap_zat: 1_000_000,
+            expires_at_unix: 2_000_000_000,
+            change_address: "u1unused".to_string(),
+            allowlist: payment
+                .outputs
+                .iter()
+                .map(|output| output.user_address.clone())
+                .collect(),
+            memo_max: 512,
+            memo_exact: None,
+            memo_required: false,
+        }
+    }
+
+    #[test]
+    fn spends_with_hidden_values_get_no_policy_share() {
+        let dealt = dealer_2_of_3(&mut OsRng).unwrap();
+        let agent = identifier(AGENT_ID).unwrap();
+        let policy = identifier(POLICY_ID).unwrap();
+        let (_, agent_commitment) = commit(&dealt.keys[&agent], &mut OsRng).unwrap();
+        let (nonces, policy_commitment) = commit(&dealt.keys[&policy], &mut OsRng).unwrap();
+        let round = Round {
+            nonces,
+            commitments: BTreeMap::from([(agent, agent_commitment), (policy, policy_commitment)]),
+        };
+        let result = authorize_pczt(
+            &dealt.keys[&policy],
+            fixture(),
+            &fixture_mandate(),
+            &Ledger::fresh("2026-10-31"),
+            1_800_000_000,
+            &[round],
+            &BTreeSet::new(),
+        )
+        .unwrap();
+        assert_eq!(result.spends.len(), 1);
+        assert_eq!(
+            result.authorized,
+            Authorized::Refused {
+                reason: "redacted_value".to_string()
+            }
+        );
+        assert!(result.commitment_ids.is_empty());
     }
 
     #[test]
@@ -586,7 +721,7 @@ mod tests {
         let mut called = false;
         let authorized = authorize(&decision, || {
             called = true;
-            Ok("nope".to_string())
+            Ok(vec!["nope".to_string()])
         })
         .unwrap();
         assert!(!called);

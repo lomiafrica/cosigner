@@ -2,6 +2,121 @@
 //! hold one FROST share. It cannot spend alone.
 
 use mandate::{Decision, InspectedPayment, Ledger, Mandate};
+use orchard::keys::{FullViewingKey, Scope};
+use orchard::primitives::redpallas::{Signature, SpendAuth};
+use pczt::roles::low_level_signer::{OrchardParseError, Signer};
+use pczt_inspect::Pool;
+use zcash_address::unified::{Container, Encoding, Fvk, Ufvk};
+
+/// The FROST group verifying key as an Orchard `ak`. Group keys are finished
+/// with even Y, which is what Orchard's encoding requires.
+pub fn group_ak(public_hex: &str) -> Result<String, String> {
+    let public = cosigner::public_from_hex(public_hex)?;
+    let ak = public
+        .verifying_key()
+        .serialize()
+        .map_err(|_| "group key".to_string())?;
+    Ok(hex::encode(ak))
+}
+
+/// The Orchard-only address that a wallet built on `ufvk` sends change to:
+/// the internal scope at diversifier index 0.
+pub fn change_address(ufvk: &str) -> Result<String, String> {
+    let (network, _, ufvk) = Ufvk::decode(ufvk.trim()).map_err(|_| "ufvk".to_string())?;
+    let orchard = ufvk
+        .items()
+        .into_iter()
+        .find_map(|item| match item {
+            Fvk::Orchard(bytes) => FullViewingKey::from_bytes(&bytes),
+            _ => None,
+        })
+        .ok_or_else(|| "ufvk has no orchard key".to_string())?;
+    let internal = orchard.address_at(0u32, Scope::Internal);
+    pczt_inspect::orchard_address(network, &internal.to_raw_address_bytes())
+        .ok_or_else(|| "address".to_string())
+}
+
+/// One aggregated spend authorization signature for one pending spend.
+pub struct SpendSignature {
+    pub pool: Pool,
+    pub index: usize,
+    pub signature: [u8; 64],
+}
+
+#[derive(Debug)]
+enum ApplyError {
+    Parse(OrchardParseError),
+    Index(usize),
+    Rejected(usize),
+}
+
+impl From<OrchardParseError> for ApplyError {
+    fn from(err: OrchardParseError) -> Self {
+        ApplyError::Parse(err)
+    }
+}
+
+impl std::fmt::Display for ApplyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ApplyError::Parse(err) => write!(f, "parse {err:?}"),
+            ApplyError::Index(index) => write!(f, "no action {index}"),
+            ApplyError::Rejected(index) => write!(f, "action {index} rejected the signature"),
+        }
+    }
+}
+
+fn apply_to_bundle(
+    bundle: &mut orchard::pczt::Bundle,
+    sighash: [u8; 32],
+    signatures: &[&SpendSignature],
+) -> Result<(), ApplyError> {
+    let actions = bundle.actions_mut();
+    for signed in signatures {
+        let action = actions
+            .get_mut(signed.index)
+            .ok_or(ApplyError::Index(signed.index))?;
+        action
+            .apply_signature(sighash, Signature::<SpendAuth>::from(signed.signature))
+            .map_err(|_| ApplyError::Rejected(signed.index))?;
+    }
+    Ok(())
+}
+
+/// Write aggregated FROST signatures into the PCZT. Each one is checked
+/// against that spend's `rk` before it is stored, so a wrong signature fails
+/// here and not at broadcast.
+pub fn apply_signatures(pczt: &[u8], signatures: &[SpendSignature]) -> Result<Vec<u8>, String> {
+    let sighash: [u8; 32] = hex::decode(
+        pczt_inspect::inspect(pczt)
+            .map_err(|err| err.to_string())?
+            .sighash_hex,
+    )
+    .ok()
+    .and_then(|bytes| bytes.try_into().ok())
+    .ok_or_else(|| "sighash".to_string())?;
+    let parsed = pczt::parse(pczt).map_err(|err| format!("pczt parse: {err:?}"))?;
+    let mut signer = Signer::new(parsed);
+    for pool in [Pool::Orchard, Pool::Ironwood] {
+        let mine: Vec<&SpendSignature> = signatures.iter().filter(|s| s.pool == pool).collect();
+        if mine.is_empty() {
+            continue;
+        }
+        signer = match pool {
+            Pool::Orchard => {
+                signer.sign_orchard_with(|_, bundle, _| apply_to_bundle(bundle, sighash, &mine))
+            }
+            Pool::Ironwood => {
+                signer.sign_ironwood_with(|_, bundle, _| apply_to_bundle(bundle, sighash, &mine))
+            }
+        }
+        .map_err(|err| format!("{} signature: {err}", pool.name()))?;
+    }
+    signer
+        .finish()
+        .serialize()
+        .map_err(|err| format!("pczt encode: {err:?}"))
+}
 
 /// ZIP-321 request URI. The memo is the unpadded base64url of `resource_id`.
 pub fn request_uri(
@@ -129,5 +244,26 @@ mod tests {
         assert!(!uri.contains("zcash://"));
         assert!(uri.contains("&message=hello"));
         assert!(request_uri("t1abc", "1", "x", None).is_err());
+    }
+
+    #[test]
+    fn a_signature_that_does_not_verify_is_not_applied() {
+        let bytes = include_bytes!("../../pczt-inspect/tests/ironwood_v6.pczt");
+        let spend = &pczt_inspect::pending_spends(bytes).unwrap()[0];
+        let wrong = SpendSignature {
+            pool: spend.pool,
+            index: spend.index,
+            signature: [1; 64],
+        };
+        let err = apply_signatures(bytes, &[wrong]).unwrap_err();
+        assert!(err.contains("rejected"), "{err}");
+        let missing = SpendSignature {
+            pool: spend.pool,
+            index: 999,
+            signature: [1; 64],
+        };
+        assert!(apply_signatures(bytes, &[missing])
+            .unwrap_err()
+            .contains("no action"));
     }
 }

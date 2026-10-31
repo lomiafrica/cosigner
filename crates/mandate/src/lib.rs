@@ -50,6 +50,10 @@ pub struct InspectedPayment {
     pub transparent: bool,
     pub sapling: bool,
     pub both_pools: bool,
+    /// An action in a bundle without cross-address transfers sends to a
+    /// receiver other than the one it spends from.
+    #[serde(default)]
+    pub cross_address: bool,
     pub negative_value: bool,
 }
 
@@ -71,6 +75,7 @@ impl InspectedPayment {
             transparent: false,
             sapling: false,
             both_pools: false,
+            cross_address: false,
             negative_value: false,
         }
     }
@@ -178,6 +183,9 @@ pub fn evaluate(
     }
     if payment.both_pools {
         return Ok(refuse("both_pools"));
+    }
+    if payment.cross_address {
+        return Ok(refuse("cross_address"));
     }
     if payment.dummy_key {
         return Ok(refuse("dummy_key"));
@@ -531,6 +539,7 @@ mod tests {
             ("transparent", "transparent"),
             ("sapling", "sapling"),
             ("both_pools", "both_pools"),
+            ("cross_address", "cross_address"),
             ("unbound_recipient", "unbound_recipient"),
             ("value_unbound", "value_unbound"),
             ("value_mismatch", "value_mismatch"),
@@ -542,6 +551,7 @@ mod tests {
                 "transparent" => payment.transparent = true,
                 "sapling" => payment.sapling = true,
                 "both_pools" => payment.both_pools = true,
+                "cross_address" => payment.cross_address = true,
                 "unbound_recipient" => payment.unbound_recipient = true,
                 "value_unbound" => payment.value_unbound = true,
                 "value_mismatch" => payment.value_mismatch = true,

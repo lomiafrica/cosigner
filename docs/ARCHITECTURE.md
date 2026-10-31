@@ -18,7 +18,7 @@ A trusted dealer exists for tests. It sees every share, so production setup is t
 
 ## PCZT
 
-The wallet engine is not in this repo. Construction and note selection stay in `zcash_client_backend` with lightwalletd or Zaino, or in a caller that already has a PCZT (Zashi, or the Zcash Foundation `zcash-sign` tool). This repo inspects that PCZT with the `pczt` crate and co-signs the shielded sighash.
+The wallet engine is not in this repo. Construction, note selection, and proving stay in `zcash_client_backend` with lightwalletd or Zaino. `scripts/pay.sh` drives `zcash-devtool` for that: a view-only wallet on the group's UFVK creates and proves the PCZT, this repo judges it and adds the spend signatures with `apply_signature`, and `zcash-devtool` extracts and broadcasts. The Orchard full viewing key around the FROST group key comes from the Zcash Foundation `zcash-sign generate`.
 
 `pczt-inspect` reads Orchard and Ironwood actions through the low-level signer role, which is the path that exposes spend values, alpha, and the value-commitment trapdoor. It then:
 

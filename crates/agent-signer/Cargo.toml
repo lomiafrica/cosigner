@@ -12,5 +12,8 @@ cosigner = { workspace = true }
 rand = "0.8"
 hex = { workspace = true }
 mandate = { workspace = true }
+orchard = { version = "0.16", default-features = false }
+pczt = { git = "https://github.com/zcash/librustzcash", rev = "a551fac8a233f54799ca1920ef78ef098cfda929", default-features = false, features = ["std", "orchard", "sapling", "transparent", "signer"] }
 pczt-inspect = { workspace = true }
 serde_json = { workspace = true }
+zcash_address = { git = "https://github.com/zcash/librustzcash", rev = "a551fac8a233f54799ca1920ef78ef098cfda929" }

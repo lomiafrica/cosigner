@@ -41,9 +41,12 @@ dependencies = [
  "cosigner",
  "hex",
  "mandate",
+ "orchard",
+ "pczt",
  "pczt-inspect",
  "rand 0.8.8",
  "serde_json",
+ "zcash_address",
 ]
 
 [[package]]
