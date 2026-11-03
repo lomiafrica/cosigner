@@ -32,7 +32,7 @@ The signer also runs the Orchard cross-address check. Since NU6.3 the Orchard po
 
 ## Backup
 
-The user share should be exported with the draft FROST member backup (the Zkool `zkfrost` string, zcash/zips proposal 1413). Version 1 is a 68-byte payload: version, member index, threshold, group size, the 32-byte signing share, and the 32-byte secret. Even Y has to be applied before that export.
+The user share should be exported with the draft FROST member backup (the Zkool `zkfrost` string, discussed in zcash/zips issue 1413 and drafted in zcash/zips pull request 1432). Version 1 is a 68-byte payload: version, member index, threshold, group size, the 32-byte signing share, and the 32-byte secret. Even Y has to be applied before that export.
 
 ## Decisions
 
