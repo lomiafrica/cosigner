@@ -1,6 +1,6 @@
 # What has been proven
 
-Recorded 31 October 2026. No transaction was broadcast from this checkout.
+Recorded 4 November 2026. Two mainnet transactions were broadcast from the one-machine demo wallet. The shares are not in this repo.
 
 ## Local
 
@@ -18,14 +18,19 @@ Recorded 31 October 2026. No transaction was broadcast from this checkout.
 
 The ZIP-321 helpers pass `tsc --noEmit` and the five Node tests in `test/`.
 
-## Mainnet wallet
+## Mainnet, one machine
 
-`scripts/local-dkg.sh` and `zcash-sign generate` produced a 2-of-3 group and an Orchard-only mainnet address. `zcash-devtool` imported the UFVK as a view-only wallet, reported the same address, and synced. `scripts/pay.sh` ran up to PCZT creation and stopped on an empty balance (`have 0, need 110000 including fee`).
+`scripts/local-dkg.sh` and `zcash-sign generate` produced a 2-of-3 group and an Orchard-only mainnet address. `zcash-devtool` imported the UFVK, synced, and `scripts/pay.sh` drove create, prove, co-sign, and broadcast. The wallet had been funded with 0.015 ZEC in the Ironwood pool. All three shares were on this machine. This is a demo, not the three-device setup.
 
-All three shares of that wallet sit on one machine. It is a demo wallet, not a three-device setup.
+On 4 November 2026, chain height 3541787:
+
+- 100000 zatoshis to the wallet's own allowlisted address. The policy share returned `allow` (fee 10000) and co-signed. Transaction `ee34835e70743d34ee65011f1b2893b5743bd791e051f23cb14f032dbd02701d`, mined in block 3541787.
+- 100000 zatoshis to an address that is not on the allowlist. The policy share returned `refuse` / `unknown_recipient` and did not sign. Nothing was broadcast.
+- 500000 zatoshis, over the 200000 per-payment cap. The policy share returned `needs_user` / `over_cap` and did not sign. Nothing was broadcast.
+- The same 500000 zatoshis again, with the user share co-signing instead of the policy share. Transaction `49599bbd74e4ca6a9a16684d211e6bfa4c6eacc3ab3ec726253c80462ba47c1d`. The node accepted it. It was still in the mempool when this note was written.
 
 ## Not run
 
-No payment has been co-signed on testnet or mainnet yet. Distributed key generation has not been run across three machines. No phone approval and no mainnet x402 payment was sent. There are no transaction ids and no screen recording.
+Distributed key generation has not been run across three machines. No phone approval and no mainnet x402 payment was sent. There is no testnet transaction and no screen recording.
 
 `agent-signer broadcast` posts JSON to `ZCASH_BROADCAST_URL` when that variable is set. It does not speak lightwalletd gRPC. With the variable unset it exits 2 and does not pretend a transaction went out.
