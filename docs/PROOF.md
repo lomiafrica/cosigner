@@ -27,7 +27,7 @@ On 4 November 2026, chain height 3541787:
 - 100000 zatoshis to the wallet's own allowlisted address. The policy share returned `allow` (fee 10000) and co-signed. Transaction `ee34835e70743d34ee65011f1b2893b5743bd791e051f23cb14f032dbd02701d`, mined in block 3541787.
 - 100000 zatoshis to an address that is not on the allowlist. The policy share returned `refuse` / `unknown_recipient` and did not sign. Nothing was broadcast.
 - 500000 zatoshis, over the 200000 per-payment cap. The policy share returned `needs_user` / `over_cap` and did not sign. Nothing was broadcast.
-- The same 500000 zatoshis again, with the user share co-signing instead of the policy share. Transaction `49599bbd74e4ca6a9a16684d211e6bfa4c6eacc3ab3ec726253c80462ba47c1d`. The node accepted it. It was still in the mempool when this note was written.
+- The same 500000 zatoshis again, with the user share co-signing instead of the policy share. Transaction `49599bbd74e4ca6a9a16684d211e6bfa4c6eacc3ab3ec726253c80462ba47c1d`. Mined in block 3541793.
 
 ## Not run
 
